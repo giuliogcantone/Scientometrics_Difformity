@@ -9,6 +9,7 @@ pacman::p_load(
   tidyverse,
   openalexR,
   readxl,
+  writexl,
   nplyr,
   arrow
 )
@@ -41,12 +42,88 @@ journals <- read_excel("ACB.xlsx") %>%
   ) %>%
   distinct(ISSN,
            .keep_all = T)
-  
-journals %>%
-  mutate(both = ABS + ANVUR) %>%
-  summarise(
-    ABS = sum(ABS),
-    ANVUR = sum(ANVUR),
-    Common = sum(both == 2)
-  )
+
+oa_fetch(
+  entity = "venues",
+  issn = journals %>% pull(ISSN) %>% unique(),
+) %>%
+  transmute(id,
+              Journal = display_name,
+              ISSN = issn,
+              counts_by_year,
+              works_count,
+              x_concepts,
+              works_api_url) %>%
+  unnest(ISSN) %>%
+    left_join(journals %>% select(-Title))  %>%
+  filter(!ABS %>% is.na(),
+         !ABS %>% is.na()) %>%
+  distinct(Journal, .keep_all = T) -> journals
+
+```
+
+Retrieve papers
+
+```{r}
+oa_fetch(
+  entity = "works",
+  primary_location.source.id = journals %>%
+    filter(ABS == 1) %>% pull(id),
+  publication_year = c(2018,2019,2021,2022),
+  authorships.institutions.country_code = c("GB"),
+  authorships.institutions.type = "education"
+) -> papers_UK_fetched
+
+oa_fetch(
+  entity = "works",
+  primary_location.source.id = journals %>%
+    filter(ANVUR == 1) %>% pull(id),
+  publication_year = c(2018,2019,2021,2022),
+  authorships.institutions.country_code = c("IT"),
+  authorships.institutions.type = "education"
+) -> papers_ITA_fetched
+```
+
+Associate papers with UK Business Schools
+
+```{r}
+papers_UK_fetched %>%
+  filter(!is.na(author)) %>%
+  distinct(display_name,
+           .keep_all = T) %>%
+  unnest(author) %>%
+  mutate(author_contribution = 1/n(),
+         .by = display_name) %>%
+    filter(institution_country_code == "GB",
+           institution_type == "education") %>%
+  transmute(
+    id,
+    Journal = so,
+    Title = display_name,
+    publication_date,
+    year = publication_year,
+    author = au_display_name,
+    author_contribution,
+    au_orcid,
+    au_id,
+    institution = institution_display_name,
+    department = au_affiliation_raw,
+    references_list = referenced_works,
+    cited_by_count,
+    counts_by_year,
+    so_id,
+    concepts) -> autorships_UK
+```
+
+I will now make this into a Excel file in order to make it easier to check it outside R
+
+```{r}
+autorships_UK %>%
+  select(Journal,
+         Title,
+         publication_date,
+         author,
+         institution,
+         department) %>%
+  writexl::write_xlsx("authorships.xlsx")
 ```
