@@ -1,0 +1,52 @@
+---
+title: "Models of IDR"
+format: pdf
+editor: visual
+---
+
+```{r setup, include=FALSE}
+pacman::p_load(
+  tidyverse,
+  openalexR,
+  readxl,
+  nplyr,
+  arrow
+)
+```
+
+## Pre-Processing
+
+Importing Journals from ANVUR Area 13 (Italy) and from ABS (UK).
+
+```{r}
+journals <- read_excel("ACB.xlsx") %>%
+  filter(`Level 2021` != "1.0") %>%
+  transmute(ISSN,Title,ABS=1) %>%
+  full_join(
+    read_excel("Area13.xlsx") %>%
+  filter_at(vars(-TITOLO), any_vars(. %>% str_detect("A"))) %>%
+  transmute(
+    Title = TITOLO,
+    ISSN = ISSN %>% str_replace("‐","-")
+  ) %>%
+  mutate(ANVUR = 1),
+  by = "ISSN",
+  ) %>%
+  transmute(
+    ISSN,
+    Title = ifelse(Title.x %>% is.na(),
+                   Title.y,Title.x),
+    ABS = coalesce(ABS,0),
+    ANVUR = coalesce(ANVUR,0)
+  ) %>%
+  distinct(ISSN,
+           .keep_all = T)
+  
+journals %>%
+  mutate(both = ABS + ANVUR) %>%
+  summarise(
+    ABS = sum(ABS),
+    ANVUR = sum(ANVUR),
+    Common = sum(both == 2)
+  )
+```
