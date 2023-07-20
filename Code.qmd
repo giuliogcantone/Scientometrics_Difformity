@@ -64,6 +64,30 @@ Functions$Gini_diversity <- function(db, entity, trait, value, d_matrix) {
 }
 ```
 
+## Building the D-matrix (of dissimilarities)
+
+```{r}
+concepts = list()
+
+oa_fetch(
+  entity = "concepts",
+  level = c(0:1)
+) -> concepts$concepts
+
+concepts$concepts_polished <- concepts$concepts %>%
+  arrange(level) %>%
+  unnest(ancestors,
+         names_sep = "_") %>%
+    transmute(
+    id,
+    concept = display_name,
+    level,
+    ancestor = ancestors_display_name,
+    related_concepts
+  )
+  
+```
+
 ## Pre-Processing
 
 Importing Journals from ANVUR Area 13 (Italy) and from ABS (UK).
