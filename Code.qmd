@@ -12,6 +12,8 @@ pacman::p_load(
   readxl,
   writexl,
   proxy,
+  rvest,
+  tidytext,
   nplyr,
   arrow,
   grid,
@@ -81,6 +83,20 @@ proxy::simil(Z, method = "cosine") %>%
 ```
 
 ## Pre-Processing
+
+### Scrape Business Schools in UK
+
+```{r}
+
+read_html("https://charteredabs.org/membership/directory/") %>%
+  html_elements(".alpha_members .interest") %>%
+  html_text() %>%
+  tibble(Name = .) -> ukbs_list
+
+ukbs_list %>%
+  write_xlsx("UKBS_list.xlsx")
+```
+
 
 Importing Journals from ANVUR Area 13 (Italy) and from ABS (UK).
 
@@ -360,4 +376,6 @@ autorships_UK %>%
   arrange(-n) %>%
   filter(n > 50) %>%
     pull(institution)
+
+
 ```
