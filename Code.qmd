@@ -7,12 +7,77 @@ editor: visual
 ```{r setup, include=FALSE}
 pacman::p_load(
   tidyverse,
+  tidymodels,
   openalexR,
   readxl,
   writexl,
+  proxy,
   nplyr,
-  arrow
+  arrow,
+  grid,
+  shadowtext
 )
+```
+
+## Building Z
+
+```{r}
+oa_fetch(
+  entity = "concepts",
+  level = c(0,1)
+) -> concepts
+
+```
+
+```{r}
+concepts %>%
+  rename(concept = display_name,
+         rel=related_concepts) %>%
+  select(concept,
+         level,
+         rel) %>%
+  unnest(rel,
+         names_sep = "_") %>%
+  rename(rel_concept = rel_display_name) %>%
+  filter(rel_level < 2) %>%
+  select(i = concept,
+         j = rel_concept,
+         c = rel_score,
+         rel_level
+         )%>%
+  mutate(c =
+           case_when(
+             rel_level == 0 ~ c/max(c),
+             TRUE ~ c
+           ),
+         .by = c(rel_level)) %>%
+  select(i, j, c) -> Z
+
+crossing(i = concepts$display_name,
+         j = concepts$display_name
+            ) %>%
+  as_tibble() %>%
+  arrange(i,j) %>%
+  left_join(Z,
+            by = c("i", "j")) %>%
+  mutate(c = ifelse(i==j,max(c,na.rm = T),c),
+         c = ifelse(is.na(c),0,c)) %>%
+  pivot_wider(names_from = j,
+              values_from = c,
+              values_fill = 0
+              ) %>%
+  select(i, sort(names(.)[-1])) %>%
+  select(-i) %>%
+  as.matrix() -> Z
+
+colnames(Z) -> row.names(Z)
+
+proxy::simil(Z, method = "cosine") %>%
+  as.matrix(diag = 1) %>%
+  as.data.frame() %>%
+  rownames_to_column("i") %>%
+  pivot_longer(-i, names_to = "j", values_to = "z") %>%
+  as_tibble() -> Z
 ```
 
 ## Pre-Processing
@@ -126,4 +191,173 @@ autorships_UK %>%
          institution,
          department) %>%
   writexl::write_xlsx("authorships.xlsx")
+```
+
+How many authors for how many Universities?
+
+```{r}
+autorships_UK %>%
+  count(institution) %>%
+  arrange(-n) %>%
+  filter(n < 50)
+
+autorships_UK %>%
+  count(author) %>%
+  arrange(-n)
+```
+
+HYPOTHESIS, COVID IMPACTED POSITIVELY PUBLISHING?
+
+```{r}
+
+autorships_UK %>%
+  summarise(total_a = sum(author_contribution),
+            .by = year) %>%
+  mutate(year = year %>% factor(levels = c("2022","2021","2019","2018"))
+         ) %>%
+  ggplot() +
+  geom_col(aes(total_a, year),
+           fill = "navy", width = 0.6) +
+  scale_x_continuous(
+  expand = c(0, 0), # The horizontal axis does not extend to either side
+    position = "top"  # Labels are located on the top
+  ) +
+  # The vertical axis only extends upwards 
+  scale_y_discrete(expand = expansion(add = c(0, 0.5))) +
+  theme(
+    # Set background color to white
+    panel.background = element_rect(fill = "white"),
+    # Set the color and the width of the grid lines for the horizontal axis
+    panel.grid.major.x = element_line(color = "#A8BAC4", size = 0.3),
+    # Remove tick marks by setting their length to 0
+    axis.ticks.length = unit(0, "mm"),
+    # Remove the title for both axes
+    axis.title = element_blank(),
+    # Only left line of the vertical axis is painted in black
+    axis.line.y.left = element_line(color = "black"),
+    # Remove labels from the vertical axis
+    axis.text.y = element_blank(),
+    # But customize labels for the horizontal axis
+    axis.text.x = element_text(family = "Econ Sans Cnd", size = 16)
+  ) +
+  geom_text(
+    aes(100, y = year, label = year),
+    hjust = 0,
+    nudge_x = 0.3,
+    colour = "white",
+    family = "Econ Sans Cnd",
+    size = 7
+  )
+
+```
+
+# DIVERSITY AND DIFFORMITY
+
+```{r}
+papers_UK_fetched %>%
+  select(X = id,
+         Y = so,
+         concepts) %>%
+  unnest(concepts) %>%
+  select(X,Y,p = score,i=display_name,level) %>%
+  filter(level < 2) %>%
+  select(-level) %>%
+  mutate(p_o = p/sum(p),
+         .by = X) %>%
+  select(-p) -> papers
+
+journals %>% select(Y = Journal,
+                     x_concepts) %>%
+  filter(Y %in% papers$Y) %>%
+  unnest(x_concepts) %>%
+  select(Y,p = score,i=display_name,level) %>%
+  filter(level < 2) %>%
+  select(-level) %>%
+  mutate(p_e = p/sum(p),
+         .by = Y) %>%
+  select(-p) ->journals_disc
+```
+
+# Diversity
+
+```{r}
+papers %>%
+summarize(crossed = list(crossing(i, i)),
+          .by = X) %>%
+  unnest(crossed) %>%
+  rename(
+    i = i...1,
+    j = i...2
+  ) %>%
+  left_join(papers %>% transmute(
+      X,
+      i = i,
+      p_i = p_o
+    )
+  ) %>%
+    left_join(papers %>% transmute(
+      X,
+      j = i,
+      p_j = p_o
+    )
+  ) %>%
+  mutate(d = map2_dbl(i,j,~1 - Z$z[Z$i == .x &
+                                   Z$j == .y]
+  )) %>%
+  summarise(.by = X,
+            RS = sum(p_i * p_j * d),
+            True_RS = 1 / (1 - RS)) -> Div_db
+```
+
+#Difformity
+
+```{r}
+journals_disc %>%
+  full_join(distinct(papers, X, Y), by = "Y") %>%
+  full_join(papers, by = c("Y", "i", "X")) %>%
+  select(Y,X,i,p_e,p_o) %>%
+  arrange(Y, X, i) %>%
+  mutate(p_e = ifelse(is.na(p_e),0,p_e),
+         p_o = ifelse(is.na(p_o),0,p_o)) %>%
+  mutate(w = map(i,
+                 ~ Z$z[Z$i == .x & Z$j %in% i]),
+         .by = "X") %>%
+  mutate(p_e = map_dbl(w, ~ sum(.x * p_e)),
+         p_o = map_dbl(w, ~ sum(.x * p_o)),
+         p_e = p_e/sum(p_e),
+         p_o = p_o/sum(p_o),
+         .by = "X") %>%
+  summarise(
+    phi = sum(abs(p_e - p_o)/((abs(p_e) + abs(p_o))*2), na.rm = T),
+    .by = "X"
+  ) -> Diff_db
+```
+
+## Joining authorships into institutions
+
+```{r}
+
+autorships_UK %>%
+  count(institution) %>%
+  arrange(-n) %>%
+  right_join(autorships_UK) %>%
+  filter(n > 100) %>%
+  select(X = id,
+         Y = Journal,
+         year,
+         a = author_contribution,
+         institution) %>%
+  left_join(Div_db %>% select(-RS)) %>%
+  right_join(Diff_db) %>%
+  summarise(.by = institution,
+            Div = sum(True_RS * a)/sum(a),
+            Diff = sum(phi * a)/sum(a)
+            ) -> Institutions_db
+
+
+autorships_UK %>%
+  count(institution) %>%
+  arrange(-n) %>%
+  filter(n > 50) %>%
+    pull(institution)
 ```
