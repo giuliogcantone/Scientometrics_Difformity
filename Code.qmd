@@ -17,7 +17,8 @@ pacman::p_load(
   nplyr,
   arrow,
   grid,
-  shadowtext
+  shadowtext,
+  ggExtra
 )
 ```
 
@@ -96,7 +97,6 @@ read_html("https://charteredabs.org/membership/directory/") %>%
 ukbs_list %>%
   write_xlsx("UKBS_list.xlsx")
 ```
-
 
 Importing Journals from ANVUR Area 13 (Italy) and from ABS (UK).
 
@@ -365,17 +365,41 @@ autorships_UK %>%
          institution) %>%
   left_join(Div_db %>% select(-RS)) %>%
   right_join(Diff_db) %>%
-  summarise(.by = institution,
+  mutate(Period = ifelse(year > 2020,"POST","PRE") %>%
+           factor)%>%
+  summarise(.by = c(institution,Period),
             Div = sum(True_RS * a)/sum(a),
             Diff = sum(phi * a)/sum(a)
-            ) -> Institutions_db
+            ) %>%
+  drop_na() -> Institutions_db
 
+```
 
-autorships_UK %>%
-  count(institution) %>%
-  arrange(-n) %>%
-  filter(n > 50) %>%
-    pull(institution)
+# Results
 
+```{r}
+Institutions_db %>%
+  summarise(corr = cor(Div,Diff))
 
+ggMarginal(
+Institutions_db %>%
+  ggplot(aes(Div,
+             Diff)) +
+  geom_point(aes(color = Period)) +
+  annotate('text',
+           label =
+           'Correlation between Diversity and Difformity = .45 \nChange in Diversity: .XX, p-value = .XX \nChange in Difformity: .XX, p-value = .XX ',
+           x = Inf, y = 3.3,
+           hjust = 1, vjust = 0,
+           color = "brown",
+           lineheight = 1) +
+  xlab("Avg. Diversity") +
+  ylab("Avg. Difformity") +
+  scale_color_viridis_d(option = "D",
+                        begin = .9,
+                        end = .3) +
+  theme_test()+
+  theme(legend.position = c(0.1, 0.85)),
+groupColour = T
+)
 ```
