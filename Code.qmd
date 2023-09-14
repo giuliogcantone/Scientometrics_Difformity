@@ -407,3 +407,22 @@ Institutions_db %>%
 groupColour = T
 )
 ```
+
+## Paul asked for departments
+
+```{r}
+
+autorships_UK %>%
+  filter(institution %in%
+           (autorships_UK %>%
+  count(institution) %>%
+  arrange(-n) %>%
+  head(1) %>%
+  pull(institution))) -> depts
+
+  autorships_UK %>%
+  count(institution) %>%
+  arrange(-n) %>%
+  head(1) %>%
+    pull(institution)
+```
