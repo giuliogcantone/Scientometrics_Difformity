@@ -18,7 +18,8 @@ pacman::p_load(
   arrow,
   grid,
   shadowtext,
-  ggExtra
+  ggExtra,
+  hrbrthemes
 )
 ```
 
@@ -223,6 +224,12 @@ autorships_UK %>%
   filter(n > 100)
 
 autorships_UK %>%
+  summarise(n = sum(author_contribution),
+            .by = institution) %>%
+  arrange(-n) %>%
+  filter(n > 50)
+
+autorships_UK %>%
   count(author) %>%
   arrange(-n)
 ```
@@ -385,27 +392,132 @@ autorships_UK %>%
 Institutions_db %>%
   summarise(corr = cor(Div,Diff))
 
+Institutions_db %>%
+  summarise(mean_div = mean(Div),
+            mean_diff = mean(Diff),
+            .by=Period)
+
+Institutions_db %>%
+  lm(data = .,
+     formula(Diff ~ Period)) %>%
+  tidy() %>%
+  janitor::adorn_rounding(3)
+
+Institutions_db %>%
+  lm(data = .,
+     formula(Div ~ Period)) %>%
+  tidy() %>%
+  janitor::adorn_rounding(3)
+```
+
+```{r}
 ggMarginal(
 Institutions_db %>%
   ggplot(aes(Div,
-             Diff)) +
-  geom_point(aes(color = Period)) +
+             Diff,
+             color = Period)) +
+  geom_point() +
+  geom_hline(
+    yintercept= 4.6,
+    color = "navy",
+    linetype = "dashed") +
+    geom_hline(
+    yintercept= 4.37,
+    color = "salmon",
+    linetype = "dashed") +
+  geom_vline(
+    xintercept= 3.76,
+    color = "navy",
+    linetype = "dashed") +
+    geom_vline(
+    xintercept= 3.73,
+    color = "salmon",
+    linetype = "dashed") +
   annotate('text',
            label =
-           'Correlation between Diversity and Difformity = .43 \nChange in Diversity: .XX, p-value = .XX \nChange in Difformity: .XX, p-value = .XX ',
-           x = Inf, y = 3.3,
+           'Correlation = .437',
+           x = 4.575, y = 3.3,
            hjust = 1, vjust = 0,
+           size = 5,
            color = "brown",
            lineheight = 1) +
   xlab("Avg. Diversity") +
   ylab("Avg. Difformity") +
-  scale_color_viridis_d(option = "D",
-                        begin = .9,
-                        end = .3) +
-  theme_test()+
-  theme(legend.position = c(0.1, 0.85)),
+  scale_color_viridis_d(option = "A",
+                        begin = .3,
+                        end = .9) +
+  theme_test(base_size = 14.5)+
+  theme(legend.position = c(0.1, 0.85),
+        legend.title = element_blank()),
 groupColour = T
 )
+
+Institutions_db %>% View()
+
+?ggExtra::ggMarginal()
+```
+
+## Lollipops
+
+```{r}
+
+Institutions_db %>%
+  head(60) %>%
+  pivot_wider(names_from = Period,
+              values_from = c(Div,Diff)) -> Lollipops
+
+Lollipops %>%
+  write_xlsx("Lolli.xlsx")
+read_xlsx("Lolli2.xlsx") -> Lollipops
+
+
+Lollipops %>%
+  mutate(
+    institution = factor(institution,
+                         institution[order(Diff_POST)]),
+    color = if_else(Diff_POST > Diff_PRE,"+","-")) %>%
+  ggplot() +
+  geom_segment(aes(y = institution,
+                   yend=institution,
+                   x=Diff_PRE,
+                   xend=Diff_POST),
+               color = "black"
+               ) +
+  geom_point(aes(y=institution, x=Diff_POST), color="navy", size=3 ) +
+  geom_point(aes(y=institution, x=Diff_PRE), color="salmon", size=3) +
+  theme_ipsum() +
+  theme(
+    axis.title.y = element_blank(),
+    legend.position = "none",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  xlab("Shift in Interdisciplinary Difformity [Business Studies]")
+
+
+
+Lollipops %>%
+  mutate(
+    institution = factor(institution,
+                         institution[order(Div_POST)]),
+    color = if_else(Div_POST > Div_PRE,"+","-")) %>%
+  ggplot() +
+  geom_segment(aes(y = institution,
+                   yend=institution,
+                   x=Div_PRE,
+                   xend=Div_POST),
+               color = "black"
+               ) +
+  geom_point(aes(y=institution, x=Div_POST), color="navy", size=3 ) +
+  geom_point(aes(y=institution, x=Div_PRE), color="salmon", size=3) +
+  theme_ipsum() +
+  theme(
+    axis.title.y = element_blank(),
+    legend.position = "none",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  xlab("Shift in Interdisciplinary Diversity after Covid-19 [Business Studies]")
 ```
 
 ## Paul asked for departments
@@ -425,4 +537,56 @@ autorships_UK %>%
   arrange(-n) %>%
   head(1) %>%
     pull(institution)
+```
+
+# Investigating Sussex
+
+```{r}
+
+papers_UK_fetched %>%
+  unnest(institution = map(author, "institution_display_name")) %>%
+  filter(institution == "University of Sussex") %>%
+  pull(id) %>% unique() -> papers_sussex
+
+autorships_UK %>%
+  filter(institution == "University of Sussex") %>%
+    select(X = id,
+         Y = Journal,
+         year,
+         a = author_contribution,
+         author) %>%
+  left_join(Div_db %>% select(-RS)) %>%
+  right_join(Diff_db) %>%
+  mutate(Period = ifelse(year > 2020,"POST","PRE") %>%
+           factor)%>%
+  summarise(.by = c(author,Period),
+            Div = sum(True_RS * a)/sum(a),
+            Diff = sum(phi * a)/sum(a),
+            Prod = sum(a)
+            ) %>%
+  drop_na() -> Sussex_authors
+
+Sussex_authors %>%
+  pivot_wider(
+    names_from = Period,
+    values_from = c(Div,Diff,Prod)
+  ) %>%
+  mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
+  rowwise() %>%
+  mutate(Tot_Prod = sum(c(Prod_PRE,Prod_POST), na.rm = T),
+         Shift_div =  sum(c(Div_POST,
+                            -1*Div_PRE), na.rm = T),
+         Shift_diff = sum(c(Diff_POST,
+                            -1*Diff_PRE), na.rm = T),
+         .after = 1
+         ) %>%
+  arrange(-Tot_Prod) -> Sussex_authors
+  
+
+Sussex_authors %>%
+  filter(Tot_Prod > 2) %>%
+  janitor::adorn_rounding(2)
+
+autorships_UK %>%
+  filter(author == "Paul Nightingale")
 ```

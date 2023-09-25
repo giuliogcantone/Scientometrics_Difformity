@@ -128,3 +128,38 @@ A
 A$w
 
 
+library(ggplot2)
+
+# Sample data
+data <- data.frame(
+  Group = rep(letters[1:3], each = 20),
+  X = rnorm(60)
+)
+
+# Calculate group averages
+group_averages <- aggregate(. ~ Group, data = data, FUN = mean)
+
+# Create the ggplot with marginal density plots and lines for group averages
+gg <- ggplot(data, aes(x = X, fill = Group)) +
+  geom_histogram(bins = 20, color = "white", alpha = 0.5) +
+  facet_grid(~Group, margins = "both") +
+  GGMorph::geom_marginal_densities(fill = "white", color = "black") +
+  stat_function(fun = function(x) dnorm(mean(x)), geom = "line", linetype = "dashed",
+                aes(color = Group), data = group_averages) +
+  scale_color_manual(values = c("a" = "red", "b" = "green", "c" = "blue")) +
+  theme_minimal()
+
+print(gg)
+
+
+tibble(
+  A = list(
+    tibble(x = 1:3, institution_display_name = "Univ 1"),
+    tibble(x = 4:6, institution_display_name = "Univ 2")
+  )  
+) -> my_tibble
+
+my_tibble %>%
+  unnest(institution_display_name = map(A, "institution_display_name")) %>%
+  mutate(institution_display_name = map_chr(institution_display_name, ~paste0('"', .x, '"')))
+
