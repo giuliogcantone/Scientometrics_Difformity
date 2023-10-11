@@ -1,0 +1,606 @@
+---
+title: "New Code"
+format: html
+editor: visual
+---
+
+```{r setup}
+pacman::p_load(
+  tidyverse,
+  tidymodels,
+  openalexR,
+  readxl,
+  writexl,
+  proxy,
+  rvest,
+  tidytext,
+  nplyr,
+  arrow,
+  grid,
+  shadowtext,
+  ggExtra,
+  hrbrthemes,
+  heatmaply
+)
+```
+
+## Building Z
+
+```{r}
+oa_fetch(
+  entity = "concepts",
+  level = c(0)
+) -> concepts
+```
+
+```{r}
+concepts %>%
+  mutate(i = recode(display_name,
+                    `Computer science` = "Comp. Sci.",
+                    `Political science` = "Law & Pol.",
+                    Mathematics = "Math.",
+                    `Materials science` = "Materials Sci.",
+                    `Environmental science` = "Environ. Sci."
+                    ),
+         dip = i
+  ) -> concepts
+
+concepts %>%
+  select(i,related_concepts) %>%
+  unnest(related_concepts,
+         names_sep = "_") %>%
+  rename(j = related_concepts_display_name) %>%
+  filter(related_concepts_level == 0) %>%
+    mutate(j = recode(j,
+                    `Computer science` = "Comp. Sci.",
+                    `Political science` = "Law & Pol.",
+                    Mathematics = "Math.",
+                    `Materials science` = "Materials Sci.",
+                    `Environmental science` = "Environ. Sci."
+                    )) %>%
+  select(i,j, c = related_concepts_score) -> Z
+
+crossing(i = concepts$dip,
+         j = concepts$dip) %>% as_tibble() %>%
+  arrange(i,j) %>%
+  left_join(Z,
+            by = c("i", "j")) %>%
+  mutate(c = ifelse(i==j,max(c,na.rm = T),c),
+         c = ifelse(is.na(c),0,c)) %>%
+  mutate(c = c/sum(c),
+         .by = i) %>%
+  pivot_wider(names_from = j,
+              values_from = c,
+              values_fill = 0
+              ) %>%
+  select(i, sort(names(.)[-1])) %>%
+  select(-i) %>%
+  as.matrix() -> Z
+
+colnames(Z) -> row.names(Z)
+
+proxy::simil(Z, method = "cosine") %>%
+  as.matrix(diag = 1) -> Z #%>%
+#  as.data.frame() %>%
+#  rownames_to_column("i") %>%
+#  pivot_longer(-i, names_to = "j", values_to = "z") %>%
+#  as_tibble()
+#-> Z
+```
+
+```{r}
+heatmaply(Z, dendrogram = "both",
+          width=8, height=6)
+
+ggheatmap(Z, hide_colorbar = T)
+
+ggsave("heatmap.png", width=8, height=6, dpi=300)
+```
+
+## Pre-Processing
+
+### Scrape Business Schools in UK
+
+```{r}
+
+read_html("https://charteredabs.org/membership/directory/") %>%
+  html_elements(".alpha_members .interest") %>%
+  html_text() %>%
+  tibble(Name = .) -> ukbs_list
+
+ukbs_list %>%
+  write_xlsx("UKBS_list.xlsx")
+```
+
+### Importing Journals from ANVUR Area 13 (Italy) and from ABS (UK).
+
+```{r}
+journals <- read_excel("ACB.xlsx") %>%
+  filter(`Level 2021` != "1.0") %>%
+  transmute(ISSN,Title,ABS=1) %>%
+  full_join(
+    read_excel("Area13.xlsx") %>%
+  filter_at(vars(-TITOLO), any_vars(. %>% str_detect("A"))) %>%
+  transmute(
+    Title = TITOLO,
+    ISSN = ISSN %>% str_replace("‐","-")
+  ) %>%
+  mutate(ANVUR = 1),
+  by = "ISSN",
+  ) %>%
+  transmute(
+    ISSN,
+    Title = ifelse(Title.x %>% is.na(),
+                   Title.y,Title.x),
+    ABS = coalesce(ABS,0),
+    ANVUR = coalesce(ANVUR,0)
+  ) %>%
+  distinct(ISSN,
+           .keep_all = T)
+
+oa_fetch(
+  entity = "venues",
+  issn = journals %>% pull(ISSN) %>% unique(),
+) %>%
+  transmute(id,
+              Journal = display_name,
+              ISSN = issn,
+              counts_by_year,
+              works_count,
+              x_concepts,
+              works_api_url) %>%
+  unnest(ISSN) %>%
+    left_join(journals %>% select(-Title))  %>%
+  filter(!ABS %>% is.na(),
+         !ABS %>% is.na()) %>%
+  distinct(Journal, .keep_all = T) -> journals
+
+journals %>%
+  filter(ABS == 1) %>%
+  unnest(x_concepts,
+         names_sep = "_") %>%
+  filter(x_concepts_level == 0) %>%
+  mutate(i = x_concepts_display_name) %>%
+  mutate(p = x_concepts_score/sum(x_concepts_score),
+         .by = id) %>%
+  summarise(p_ABS = sum(p),
+            .by = i) %>%
+  arrange(-p_ABS) %>%
+  left_join(journals %>%
+  filter(ANVUR == 1) %>%
+  unnest(x_concepts,
+         names_sep = "_") %>%
+  filter(x_concepts_level == 0) %>%
+  mutate(i = x_concepts_display_name) %>%
+  mutate(p = x_concepts_score/sum(x_concepts_score),
+         .by = id) %>%
+  summarise(p_ANVUR = sum(p),
+            .by = i)
+  ) %>%
+  mutate(p_ABS = p_ABS/sum(p_ABS),
+         p_ANVUR = p_ANVUR/sum(p_ANVUR)) %>%
+  mutate(i = recode(i,
+                    `Computer science` = "Comp. Sci.",
+                    `Political science` = "Law & Pol.",
+                    Mathematics = "Math.",
+                    `Materials science` = "Materials Sci.",
+                    `Environmental science` = "Environ. Sci."
+                    ))
+
+journals %>%
+  unnest(x_concepts,
+         names_sep = "_") %>%
+  filter(x_concepts_level == 0) %>%
+  mutate(i = x_concepts_display_name) %>%
+  mutate(p = x_concepts_score/sum(x_concepts_score),
+         .by = id) %>%
+  filter(
+    i == "Business",
+    p > .1) %>%
+  select(id) %>%
+  left_join(journals) -> j_select
+
+j_select %>%
+  filter(ABS == 1) %>%
+  unnest(x_concepts,
+         names_sep = "_") %>%
+  filter(x_concepts_level == 0) %>%
+  mutate(i = x_concepts_display_name) %>%
+  mutate(p = x_concepts_score/sum(x_concepts_score),
+         .by = id) %>%
+  summarise(p_ABS = sum(p),
+            .by = i) %>%
+  arrange(-p_ABS) %>%
+  left_join(j_select %>%
+  filter(ANVUR == 1) %>%
+  unnest(x_concepts,
+         names_sep = "_") %>%
+  filter(x_concepts_level == 0) %>%
+  mutate(i = x_concepts_display_name) %>%
+  mutate(p = x_concepts_score/sum(x_concepts_score),
+         .by = id) %>%
+  summarise(p_ANVUR = sum(p),
+            .by = i)
+  ) %>%
+  mutate(p_ABS = p_ABS/sum(p_ABS),
+         p_ANVUR = p_ANVUR/sum(p_ANVUR)) %>%
+  mutate(i = recode(i,
+                    `Computer science` = "Comp. Sci.",
+                    `Political science` = "Law & Pol.",
+                    Mathematics = "Math.",
+                    `Materials science` = "Materials Sci.",
+                    `Environmental science` = "Environ. Sci."
+                    ))
+
+j_select %>%
+  filter(ANVUR == 1)
+
+j_select %>%
+  filter(ABS == 1)
+
+
+j_select %>%
+  filter(ANVUR == 1,
+         ABS == 1)
+
+j_select %>%
+  select(Journal,
+         x_concepts) %>%
+  unnest(x_concepts) %>%
+  filter(level < 1) %>%
+  select(Journal,
+         p_e = score,
+         i=display_name) %>%
+  mutate(p_e = p_e/sum(p_e),
+         .by = Journal) %>%
+  mutate(i = recode(i,
+                    `Computer science` = "Comp. Sci.",
+                    `Political science` = "Law & Pol.",
+                    Mathematics = "Math.",
+                    `Materials science` = "Materials Sci.",
+                    `Environmental science` = "Environ. Sci."
+                    )) -> journals_disc
+```
+
+```{r}
+oa_fetch(
+  entity = "works",
+  primary_location.source.id = j_select %>% pull(id),
+  publication_year = c(2018,2019,2021,2022),
+  authorships.institutions.type = "education",
+  authorships.institutions.country_code = c("IT","GB"),
+) -> papers
+
+papers %>%
+  transmute(id,
+           title = display_name,
+           author,
+           Journal = so,
+           publication_date,
+           year = publication_year,
+           Period = ifelse(year > 2020,"POST","PRE") %>% factor,
+           counts_by_year,
+           referenced_works,
+           concepts) -> papers
+
+papers <- papers %>%
+  filter(title %>% str_detect("Erratum", negate = T),
+         title %>% str_detect("Editor", negate = T),
+         title %>% str_detect("Corrige", negate = T),
+         title %>% str_detect("Publisher Correction", negate = T)
+         ) %>%
+  filter(!is.na(author)) %>%
+  arrange(publication_date) %>%
+    distinct(title,
+           .keep_all = T)
+```
+
+### Quantification of National effort
+
+```{r}
+papers %>%
+  unnest(author) %>%
+  mutate(a = 1/n(),
+         .by = id) %>%
+  summarise(a = sum(a),
+         .by = c(id,institution_country_code)) %>%
+  filter(institution_country_code %in% c("IT","GB")) %>%
+  rename(Country = institution_country_code) %>%
+  pivot_wider(names_from = Country,
+              values_from = a,
+              values_fill = 0) %>%
+  rename(a_GB = GB, a_IT = IT) %>%
+  left_join(papers) -> papers
+```
+
+### Disciplinary profiles of papers
+
+```{r}
+papers %>%
+  select(x = id,Journal,concepts) %>%
+  unnest(concepts) %>%
+  filter(level < 1) %>%
+  select(id = x,Journal,
+         p_o = score,
+         i=display_name) %>%
+  mutate(p_o = p_o/sum(p_o),
+         .by = id) %>%
+  mutate(i = recode(i,
+                    `Computer science` = "Comp. Sci.",
+                    `Political science` = "Law & Pol.",
+                    Mathematics = "Math.",
+                    `Materials science` = "Materials Sci.",
+                    `Environmental science` = "Environ. Sci."
+                    )) -> papers_disc
+```
+
+## Results
+
+### Diversity
+
+```{r}
+papers_disc %>%
+summarize(crossed = list(crossing(i, i)),
+          .by = id) %>%
+  unnest(crossed) %>%
+  rename(
+    i = i...1,
+    j = i...2
+  ) %>%
+  left_join(papers_disc %>% transmute(
+      id,
+      i = i,
+      p_i = p_o
+    )
+  ) %>%
+    left_join(papers_disc %>% transmute(
+      id,
+      j = i,
+      p_j = p_o
+    )
+  ) %>%
+  mutate(d = map2_dbl(i,j,~1 - Z[.x,.y]
+  )) %>%
+  summarise(.by = id,
+            RS = sum(p_i * p_j * d),
+            True_RS = 1 / (1 - RS)) -> Div_db
+```
+
+### Difformity
+
+```{r}
+journals_disc %>%
+  full_join(distinct(papers_disc, id, Journal),
+            by = "Journal") %>%
+  full_join(papers_disc, by = c("Journal", "i", "id")) %>%
+  select(Journal,id,i,p_e,p_o) %>%
+  arrange(Journal, id, i) %>%
+  mutate(p_e = ifelse(is.na(p_e),0,p_e),
+         p_o = ifelse(is.na(p_o),0,p_o)) %>%
+  filter(!i %>% is.na()) %>%
+  mutate(w = map(i,
+                 ~ Z[.x,i]),
+         .by = "id") %>%
+  mutate(p_e = map_dbl(w, ~ sum(.x * p_e)),
+         p_o = map_dbl(w, ~ sum(.x * p_o)),
+         p_e = p_e/sum(p_e),
+         p_o = p_o/sum(p_o),
+         .by = "id") %>%
+  summarise(
+    phi = sum(abs(p_e - p_o)/((abs(p_e) + abs(p_o))*2), na.rm = T),
+    .by = "id"
+  ) -> Diff_db
+```
+
+### DB of Unis
+
+```{r}
+papers %>%
+  left_join(j_select %>%
+              select(Journal, ABS, ANVUR)) %>%
+  unnest(author) %>%
+  rename(institution = institution_display_name,
+         country = institution_country_code) %>%
+  filter(!institution %>% is.na(),
+         country == "GB",
+         ABS == 1) %>%
+  mutate(a = 1/n(),
+         .by = id) %>%
+  mutate(n_a = sum(a),
+         .by = institution) %>%
+  filter(n_a > 40) %>%
+  select(id,
+         Journal,
+         institution,
+         country,
+         Period,
+         a) %>%
+  mutate(n_a)
+  left_join(Div_db %>% select(-RS)) %>%
+  right_join(Diff_db) %>%
+  summarise(.by = c(institution,Period,country),
+            Div = sum(True_RS * a)/sum(a),
+            Diff = sum(phi * a)/sum(a)
+            ) %>%
+  drop_na() %>%
+  add_row(
+    papers %>%
+  left_join(j_select %>%
+              select(Journal, ABS, ANVUR)) %>%
+  unnest(author) %>%
+  rename(institution = institution_display_name,
+         country = institution_country_code) %>%
+  filter(!institution %>% is.na(),
+         country == "IT",
+         ANVUR == 1) %>%
+  mutate(a = 1/n(),
+         .by = id) %>%
+  mutate(n_a = sum(a),
+         .by = institution) %>%
+  filter(n_a > 40) %>%
+  select(id,
+         Journal,
+         institution,
+         country,
+         Period,
+         a) %>%
+  left_join(Div_db %>% select(-RS)) %>%
+  right_join(Diff_db) %>%
+  summarise(.by = c(institution,Period,country),
+            Div = sum(True_RS * a)/sum(a),
+            Diff = sum(phi * a)/sum(a)
+            ) %>%
+  drop_na()) -> Institutions_db
+```
+
+```{r}
+Institutions_db %>%
+  filter(country == "GB") %>%
+  lm(data = .,
+     formula(Diff ~ Period)) %>%
+  tidy() %>%
+  janitor::adorn_rounding(3)
+
+Institutions_db %>%
+  filter(country == "GB") %>%
+  lm(data = .,
+     formula(Div ~ Period)) %>%
+  tidy() %>%
+  janitor::adorn_rounding(3)
+
+Institutions_db %>%
+  filter(country == "IT") %>%
+  lm(data = .,
+     formula(Diff ~ Period)) %>%
+  tidy() %>%
+  janitor::adorn_rounding(3)
+
+Institutions_db %>%
+  filter(country == "IT") %>%
+  lm(data = .,
+     formula(Div ~ Period)) %>%
+  tidy() %>%
+  janitor::adorn_rounding(3)
+```
+
+### PLOTS
+
+```{r}
+ggMarginal(
+Institutions_db %>%
+  filter(country = "GB") %>%
+  ggplot(aes(Div,
+             Diff,
+             color = Period)) +
+  geom_point() +
+  geom_hline(
+    yintercept= 4.6,
+    color = "navy",
+    linetype = "dashed") +
+    geom_hline(
+    yintercept= 4.37,
+    color = "salmon",
+    linetype = "dashed") +
+  geom_vline(
+    xintercept= 3.76,
+    color = "navy",
+    linetype = "dashed") +
+    geom_vline(
+    xintercept= 3.73,
+    color = "salmon",
+    linetype = "dashed") +
+  annotate('text',
+           label =
+           'Correlation = .437',
+           x = 4.575, y = 3.3,
+           hjust = 1, vjust = 0,
+           size = 5,
+           color = "brown",
+           lineheight = 1) +
+  xlab("Avg. Diversity") +
+  ylab("Avg. Difformity") +
+  scale_color_viridis_d(option = "A",
+                        begin = .3,
+                        end = .9) +
+  theme_test(base_size = 14.5)+
+  theme(legend.position = c(0.1, 0.85),
+        legend.title = element_blank()),
+groupColour = T
+)
+```
+
+## Semantic Check
+
+```{r}
+papers_disc %>%
+  left_join(papers %>%
+              select(id,a_GB,a_IT,Period)) %>%
+  left_join(journals %>%
+              select(Journal,ABS,ANVUR)) %>%
+  filter(ABS == 1) %>%
+  mutate(p_o = p_o * a_GB) %>%
+  mutate(sum_p_o = sum(p_o, na.rm = T),
+         .by = Period) %>%
+  summarise(p_o = sum(p_o)/first(sum_p_o),
+            .by = c(i,Period)
+            ) %>%
+  janitor::adorn_rounding(3) %>%
+  mutate(Country = "UK") %>%
+  add_row(papers_disc %>%
+  left_join(papers %>%
+              select(id,a_GB,a_IT,Period)) %>%
+  left_join(journals %>%
+              select(Journal,ABS,ANVUR)) %>%
+  filter(ANVUR == 1) %>%
+  mutate(p_o = p_o * a_IT) %>%
+  mutate(sum_p_o = sum(p_o, na.rm = T),
+         .by = Period) %>%
+  summarise(p_o = sum(p_o)/first(sum_p_o),
+            .by = c(i,Period)
+            ) %>%
+  janitor::adorn_rounding(3) %>%
+  mutate(Country = "IT")) %>%
+  mutate(logit = qlogis(p_o)) %>%
+  pivot_longer(cols = c(p_o,logit),
+               names_to = "Measure") %>%
+    mutate(
+    Measure = factor(Measure, levels = c("p_o","logit"))
+    ) %>%
+  pivot_wider(names_from = Period,
+              values_from = value)-> semantic_check
+
+semantic_check %>%
+  filter(PRE > .01,
+         POST > .01) %>%
+  ggplot() +
+    geom_rect(data = semantic_check %>%
+                filter(i == "Business"),
+            xmin = -Inf,xmax = Inf,
+            ymin = -Inf,ymax = Inf,
+            fill = "cornsilk",
+            alpha = .3) +
+  geom_segment(aes(x=PRE, xend=POST,
+                   y=Country, yend=Country), color="green") +
+  geom_point(aes(x=POST, y=Country),
+             color = "navy") +
+  geom_point(aes(x=PRE, y=Country),
+             color = "salmon") +
+  xlab("shift") +
+      theme_test() +  # You can use a different theme as needed
+  theme(
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 15,
+                                vjust = 1, hjust = 1),
+    axis.text.x = element_text(size = 13),
+    axis.text.y = element_text(size = 13),
+    strip.text.y = element_text(size = 10),
+    strip.text.x = element_text(size = 11),
+  ) +
+  facet_grid(i ~ Measure,
+             scales = "free_x",
+             switch="y") +
+  theme(strip.placement = "outside",
+        strip.clip = "off",
+        strip.background = element_blank()) +
+  xlab("Disciplinary Shift in Journals of Business")
+```

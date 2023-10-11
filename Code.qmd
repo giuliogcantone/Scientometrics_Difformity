@@ -303,7 +303,7 @@ journals %>% select(Y = Journal,
   select(-level) %>%
   mutate(p_e = p/sum(p),
          .by = Y) %>%
-  select(-p) ->journals_disc
+  select(-p) -> journals_disc
 ```
 
 ### Diversity
@@ -589,4 +589,41 @@ Sussex_authors %>%
 
 autorships_UK %>%
   filter(author == "Paul Nightingale")
+```
+
+## Semantic Check
+
+```{r}
+papers %>%
+  left_join(
+    papers_UK_fetched %>%
+      select(X = id,
+             year = publication_year)
+  ) %>%
+  left_join(concepts %>%
+              select(i = display_name,
+                     level)) %>%
+  filter(level == 0) %>%
+  mutate(p_o = p_o / sum(p_o),
+         .by = X) %>%
+  left_join(autorships_UK %>%
+              summarise(a = sum(author_contribution),
+                        .by = id) %>%
+              rename(X = id)) %>%
+  filter(a > 0) %>%
+  mutate(Period = ifelse(year > 2020,"POST","PRE"),
+         p_o = p_o * a) %>%
+  mutate(sum_p_o = sum(p_o, na.rm = T),
+         .by = Period) %>%
+  summarise(p_o = sum(p_o)/first(sum_p_o),
+            .by = c(i,Period)
+            ) %>%
+  pivot_wider(names_from = Period,
+              values_from = p_o) %>%
+  mutate(
+    UK_Raise = (POST/PRE) - 1,
+    UK_ql = qlogis(POST) - qlogis(PRE)) %>%
+    janitor::adorn_rounding(4) %>%
+  arrange(i) %>%
+  write_xlsx("all_pooled_UK.xlsx")
 ```

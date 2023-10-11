@@ -163,3 +163,9 @@ my_tibble %>%
   unnest(institution_display_name = map(A, "institution_display_name")) %>%
   mutate(institution_display_name = map_chr(institution_display_name, ~paste0('"', .x, '"')))
 
+papers %>%
+  filter(id == "https://openalex.org/W2886903294") %>%
+  unnest(concepts,
+         sep = "_") %>%
+  filter(level < 1) %>%
+  View()
