@@ -126,7 +126,7 @@ journals <- read_excel("ACB.xlsx") %>%
     ISSN = ISSN %>% str_replace("‐","-")
   ) %>%
   mutate(ANVUR = 1),
-  by = "ISSN",
+  .by = "ISSN",
   ) %>%
   transmute(
     ISSN,
